@@ -1,0 +1,2348 @@
+-------------------basic steps required with mongoose connectivity---------------------
+const express = require('express')
+const mongoose = require('mongoose')
+const bcrypt = require('bcryptjs')
+const jwt = require('jsonwebtoken')
+const cookieparser = require('cookie-parser')
+const path = require('path')
+const { type } = require('os')
+
+const port = 4944
+const app = express();
+
+app.use(express.json());
+app.use(express.urlencoded({extended:true}));
+app.use(cookieparser());
+
+const User = mongoose.model('User',new mongoose.Schema({
+    uname : {type : 'String',required : true},
+    email : {type : 'String',required : true,unique : true},
+    password : {type : 'String', required : true},
+    pimage : {type : 'String',required : true}
+}));
+
+const Product = mongoose.model('Product',new mongoose.Schema({
+    pname : {type :'String',required : true},
+    price : {type : 'Number', required : true},
+    desc : { type : 'String',required : true}
+}));
+
+mongoose.connect("mongodb://localhost:27017/ExamApp").then((db) => {
+    console.log("Mongo Connected");
+}).catch(err => {
+    console.error(err);
+})
+
+
+
+app.listen(port,(err)=>{
+    if(err){
+        console.error(err);
+    }
+    console.log("Server Running On Port 4944");
+})
+
+---------------------------------------index.js file in node ----------------------------------------------
+const express = require('express')
+const mongoose = require('mongoose')
+const bcrypt = require('bcryptjs')
+const jwt = require('jsonwebtoken')
+const cookieparser = require('cookie-parser')
+const path = require('path')
+const { type } = require('os')
+const multer = require('multer');
+
+const port = 4944
+const app = express();
+
+const secretkey = "12AB34CD56EF78GH";
+app.set("view engine",'ejs');
+app.use(express.json());
+app.use(express.urlencoded({extended:true}));
+app.use(express.static(path.join(__dirname, 'views')))
+app.use(cookieparser());
+app.use('/uploads', express.static('uploads'));
+
+const storage = multer.diskStorage({
+    destination : (req,file,cb)=>{
+        cb(null,'./uploads/');
+    },
+    filename:(req,file,cb)=>{
+        cb(null,file.originalname);
+    }
+})
+
+const upload = multer({storage:storage})
+
+const User = mongoose.model('User',new mongoose.Schema({
+    username : {type : 'String',required : true},
+    email : {type : 'String',required : true,unique : true},
+    password : {type : 'String', required : true},
+    pimage : {type : 'String',required : false}
+}));
+
+const Product = mongoose.model('Product',new mongoose.Schema({
+    pname : {type :'String',required : true},
+    price : {type : 'Number', required : true},
+    desc : { type : 'String',required : true}
+}));
+
+mongoose.connect("mongodb://localhost:27017/ExamApp").then((db) => {
+    console.log("Mongo Connected");
+}).catch(err => {
+    console.error(err);
+})
+
+const authenticateJWT = (req, res, next) => {
+    const token = req.cookies.token;
+    // console.log(token)
+    if (!token) return res.send("Access Denied");
+    jwt.verify(token, secretkey, (err, user) => {
+        if (err) return res.send(err);
+        req.user = user;
+        console.log(user)
+        next();
+    })
+}
+const redirectAuth = (req, res, next) => {
+    const token = req.cookies.token
+    if (token) {
+        jwt.verify(token, secretkey, (err) => {
+            if (!err) {
+                return res.redirect("/")
+            }
+        });
+    }
+    next();
+}
+
+app.get("/",authenticateJWT,(req,res)=>{
+    res.render("home",{userId:req.user.userId,userName:req.user.userName,email:req.user.email});
+})
+
+app.get("/register",(req,res)=>{
+    res.render("register");
+})
+
+app.post("/register",upload.single('pimage'),async(req,res)=>{
+    console.log(req.body);
+    const { username,email,password} = req.body
+    const hashpwd = await bcrypt.hash(password,15);
+    // const suser = new User({ uname,email,password:hashpwd,pimage})
+    const pimage = req.file ? req.file.filename : null;
+
+    const suser = new User({
+        username,email,password:hashpwd,pimage
+    })
+
+    try{
+        await suser.save()
+        res.status(200).send("User Added Successfully");
+        res.redirect("/login")
+    }catch(err){
+        console.error(err);
+    }
+})
+
+app.get("/login",(req,res)=>{
+    res.render("login");
+})
+
+app.post("/login",redirectAuth,async(req,res)=>{
+    const {email,password} = req.body;
+
+    try{
+        const user = await User.findOne({email});
+
+        if (!user) {
+            return res.send("<script>alert('User Not found'); window.location.href='/login';</script>");
+        }        
+
+        const match = await bcrypt.compare(password,user.password)
+        if(!match)
+        {
+                res.send("<script>alert('Invalid cradentil');</sctipt>")
+        }
+        const token = jwt.sign({ userId: user._id, userName: user.username, email: user.email }, secretkey, { expiresIn: "1h" })
+        res.cookie('token', token, { httpOnly: true }, { expiresIn: 36000000 })
+        res.redirect("/")
+    }catch(err){
+        console.error(err.message);
+    }
+})
+
+app.get("/logout",(req,res)=>{
+    res.clearCookie('token');
+    res.redirect("/login");
+})
+
+app.get("/addproduct",(req,res)=>{
+    res.render("addproduct");
+})
+
+app.post("/addproduct",async (req,res)=>{
+    const { pname ,price,desc} = req.body;
+
+    try{
+        const product = new Product({pname:pname,price:price,desc:desc});
+        const response = await product.save();
+        console.log(response);
+        res.redirect("products");
+    }catch(err){
+        console.error(err.message);
+    }
+
+})
+
+app.get("/products",async (req,res)=>{
+    try{
+        const data = await Product.find();
+        res.render("products",{data});
+    }catch(err){
+        console.error(err);
+    }
+})
+
+app.get("/delete/:id",async (req,res) => {
+    const id = req.params.id;
+    try{
+        const response = await Product.deleteOne({_id:id});
+        res.redirect("/products");
+        console.log(response);
+    
+    }catch(err){
+        console.error(err.message);
+    }
+})
+
+app.get("/edit/:id",async (req,res)=>{
+    const id = req.params.id;
+    try{
+        const data = await Product.findOne({_id : id});
+        res.render(`edit`,{data});
+    }catch(err){
+        console.error(err.message);
+    }
+})
+
+app.post("/editproduct/:id",async (req,res)=>{
+    const {id} = req.params;
+    const {pname,price,desc} = req.body;
+
+    try{
+        const response = await Product.findByIdAndUpdate(id,{pname,price,desc});
+        console.log(response);
+        res.redirect("/products");
+    }catch(err){
+        console.error(err.message);
+    }
+})
+
+// To get the data in php in json formate
+app.get("/api/products",async (req,res)=>{
+    try{
+        const data = await Product.find();
+        res.json(data);
+    }catch(err){
+        console.error(err);
+    }
+})
+
+
+app.listen(port,(err)=>{
+    if(err){
+        console.error(err);
+    }
+    console.log("Server Running On Port 4944");
+})
+---------------------------------------------addproduct.ejs--------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Product</title>
+</head>
+<body>
+    <form method="post" action="/addproduct">
+        <table align="center" border="1">
+            <tr>
+                <td>Product Name:</td>
+                <td>
+                    <input type="text" name="pname">
+                </td>
+            </tr>
+            <tr>
+                <td>Price:</td>
+                <td>
+                    <input type="text" name="price">
+                </td>
+            </tr>
+            <tr>
+                <td>Description:</td>
+                <td>
+                    <input type="text" name="desc">
+                </td>
+            </tr>
+            <tr>
+                <td></td>
+                <td>
+                    <button type="submit" name="btnaddProduct">Add Product</button>
+                </td>
+            </tr>
+        </table>
+    </form>
+</body>
+</html>
+-------------------------------------------displayproducts.ejs---------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product List</title>
+</head>
+<body>
+
+    <h1 align="center">Product List</h1>
+
+    <table border="1" align="center">
+        <thead>
+            <tr>
+                <th>Product Name</th>
+                <th>Price</th>
+                <th>Description</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% data.forEach(function(product) { %>
+                <tr>
+                    <td><%= product.pname %></td>
+                    <td><%= product.price %></td>
+                    <td><%= product.desc %></td>
+                    <td>
+                        <!-- Edit button -->
+                        <a href="/edit/<%= product._id %>">Edit</a> |
+                        <!-- Delete button -->
+                        <a href="/delete/<%= product._id %>" onclick="return confirm('Are you sure you want to delete this product?')">Delete</a>
+                    </td>
+                    
+                </tr>
+            <% }) %>
+        </tbody>
+        <tr>
+            <td></td>
+            <td>
+                <a href="/addproduct">Add Product</a>
+            </td>
+        </tr>
+    </table>
+
+
+</body>
+</html>
+--------------------------------------------editproducts.ejs--------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Product</title>
+</head>
+<body>
+
+    <h1 align="center">Edit Product</h1>
+
+    <form action="/editproduct/<%= data._id %>" method="POST">
+        <table border="1" cellpadding="10" cellspacing="0" align="center">
+            <tr>
+                <td>Product Name</td>
+                <td><input type="text" name="pname" value="<%= data.pname %>" required></td>
+            </tr>
+            <tr>
+                <td>Price</td>
+                <td><input type="number" name="price" value="<%= data.price %>" required></td>
+            </tr>
+            <tr>
+                <td>Description</td>
+                <td><textarea name="desc" required><%= data.desc %></textarea></td>
+            </tr>
+            <tr>
+                <td colspan="2" align="center">
+                    <button type="submit">Update Product</button>
+                </td>
+            </tr>
+        </table>
+    </form>
+
+    <br>
+    <div align="center">
+        <a href="/products">Back to Product List</a>
+    </div>
+
+</body>
+</html>
+------------------------------------------------register.ejs-----------------------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registration</title>
+</head>
+<body>
+    <form action="/register" method="post" enctype="multipart/form-data">
+
+        <table border="1" align="center" cellspacing="10px" cellpadding="10px">
+                <tr>
+                    <td>UserName</td>
+                    <td>
+                        <input type="text" name="username" required>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Email</td>
+                    <td>
+                        <input type="text" name="email" required>
+                    </td>
+                </tr>
+                <tr>
+                    <td>Password</td>
+                    <td>
+                        <input type="text" name="password">
+                    </td>
+                </tr>
+                <tr>
+                    <td>Profile Pic</td>
+                    <td>
+                        <input type="file" name="pimage" required>
+                    </td>
+                </tr>
+                <tr>
+                    <td></td>
+                    <td>
+                        <button type="submit" name="btnregister">Submit</button>
+                    </td>
+                </tr>
+        </table>
+    </form>
+
+</body>
+</html>
+----------------------------------------------------login.ejs----------------------------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+</head>
+<body>
+    <form action="/login" method="post">
+        <table border="1" align="center" cellspacing="10px" cellpadding="10px">
+            <tr>
+                <td>Username:</td>
+                <td>
+                    <input type="text" name="email">
+                </td>
+            </tr>
+            <tr>
+                <td>Password:</td>
+                <td>
+                    <input type="text" name="password">
+                </td>
+            </tr>
+            <tr>
+                <td></td>
+                <td>
+                    <button type="submit" name="btnlogin">Login</button>
+                </td>
+            </tr>
+        </table>
+    </form>
+</body>
+</html>
+-------------------------------------------------home.ejs-----------------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home Page</title>
+</head>
+<body>
+    <h1>Welcome, <%= userName %>!</h1>
+    <p>Email: <%= email %></p>
+    <p>User ID: <%= userId %></p>
+    <a href="/logout">Logout</a>
+</body>
+</html>
+
+
+--------------php file should be stored in xamp or wamp folder in httodc or www----------
+-------------------------------------------------fetchproduct.php---------------------------
+<?php
+
+$ch = curl_init();
+
+$url = "http://localhost:4944/products";  
+
+curl_setopt($ch, CURLOPT_URL, $url);//to hit url of api
+
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);//to set the output into string formate
+
+curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "GET");//to define the type of request
+
+$response = curl_exec($ch);//actual call the api 
+
+if(curl_errno($ch)) {
+    echo 'cURL Error: ' . curl_error($ch);
+} else {
+    echo "Response from server: " . $response;
+}
+
+curl_close($ch);
+
+?>
+------------------------------------------------insertproduct.php------------------------------------
+<?php
+    if(isset($_REQUEST['btnAdd']))
+    {
+        $data=[
+            "pname"=>$_REQUEST['txtpname'],
+            "price"=>$_REQUEST['txtprice'],
+            "desc"=>$_REQUEST['txtDesc']
+        ];
+
+        $ch=curl_init();
+
+        $url = "http://localhost:4944/addproduct";  
+
+        curl_setopt($ch, CURLOPT_URL, $url);//to hit url of api
+
+        curl_setopt($ch, CURLOPT_POST, true);//to set the output into string formate
+
+        curl_setopt($ch, CURLOPT_POSTFIELDS,http_build_query($data));//to set the output into string formate
+    
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);//to set the output into string formate
+        
+
+        $response = curl_exec($ch);//actual call the api 
+
+        if(curl_errno($ch)) {
+            echo 'cURL Error: ' . curl_error($ch);
+        } else {
+            print_r($response);
+            if($response=="Found. Redirecting to /teacher")
+            {
+                header("location:fetch.php");
+            }
+        }
+
+        curl_close($ch);
+    }
+?>
+
+
+<html lang="en">
+    <head>
+        <title>Insert</title>
+    </head>
+    <body>
+        <form method="post">
+            Enter Product Name : <input type="text" name="txtpname">
+            <br>
+            Enter Price : <input type="text" name="txtprice">
+            <br>
+            Enter Description : <input type="text" name="txtDesc">
+            <br>
+            <input type="submit" value="Add Product" name="btnAdd">
+        </form>
+    </body>
+</html>
+
+--------------------------------roshan shrib--------------------------
+command line for git = git clone https://github.com/aleth098/node
+
+code of crud operation using php for dept and emp 
+	|
+start xammp or wamp server
+	|
+create a one "folder" in "htdocs" for "xammp server" and create a folder in "wamp64/www" for wamp server
+	|
+create and open particular folder in vscode
+	|
+open folder in vscode terminal
+	|
+write a command line for node_module or package
+	|
+npm init
+npm i nodemon
+npm i nodemon -g
+npm i cors ejs express express-session mongodb mongoose bcryptjs cookie-parser jsonwebtoken 
+	|
+create "index.js" & "db.js" file for connect mongodb & server creation
+	|
+---------------
+in "db.js" file
+---------------
+
+let mongoose = require('mongoose')
+
+mongoose.connect("mongodb://localhost:27017/dbname")
+
+module.exports = mongoose;
+	
+
+---------------
+in "index.js" file
+---------------
+
+let express = require('express')
+let cors = require('cors')
+
+let server = express()
+server.use(express.json())
+server.use(cors())
+
+let deptRoute = require('./Routes/deptRoute')
+server.use(deptRoute)
+
+let empRoute = require('./Routes/empRoute')
+server.use(empRoute)
+
+server.listen(2000)
+
+---------------------------
+	|
+create "Models" & "Routes" folder for database schema & crud operation
+	|
+create "Dept.js" & "Emp.js" in "Models" folder
+	|
+-------------------
+in "Dept.js" file
+-------------------
+
+let db = require('../db')
+
+let schema = new db.Schema({
+    name: {
+        type: String,
+        required: true
+    },
+    city: {
+        type: String,
+        required: true
+    }
+});
+
+let Dept = db.model('Dept', schema);
+
+module.exports = Dept
+
+--------------------
+	|
+-------------------
+in "Emp.js" file
+-------------------
+
+let db = require('../db')
+
+let schema = new db.Schema({
+    name:{
+        type : String,
+        required : true
+    },
+    email:{
+        type : String,
+        required : true
+    },
+    password:{
+        type:String,
+        required : true
+    },
+    pno:{
+        type: Number,
+        required : true
+    }
+})
+
+let Emp = db.model('Emp',schema)
+module.exports = Emp
+
+-------------------------------------------------
+	|
+create "deptRoute.js" & "empRoute.js" file in "Routes"
+	|
+-------------------------
+in "deptRoute.js" file
+-------------------------
+
+let Dept = require('../Models/Dept')
+const router = require('express').Router()
+
+//get all
+router.get('/dept/findall' , async function (req , res){
+    let alldept = await Dept.find({})
+    return res.json(alldept)
+})
+
+// Add New Department
+router.post('/dept/addnew' , async function (req,res) {
+    let {name , city} = req.body
+    let d = new Dept
+    d.name = name
+    d.city = city
+    await d.save()
+    return res.json(d)
+})
+
+// Update Department
+router.post('/dept/update/:id', async function (req, res) {
+    let {name, city} = req.body;
+    let id = req.params.id;
+    let d = await Dept.findById(id);
+    d.name = name
+    d.city = city
+    await d.save()
+    return res.json(d);
+})
+
+// Delete Department
+router.get('/dept/delete/:id', async function (req, res) {
+    let id = req.params.id
+    let d = await Dept.findByIdAndDelete(id)
+    return res.json(d)
+})
+
+// Get Single Department
+router.get('/dept/getsingle/:id', async function (req, res) {
+    let id = req.params.id
+    let d = await Dept.findById(id)
+    return res.json(d)
+})
+
+module.exports = router
+
+-------------------------
+	|
+-------------------------
+in empRoute.js file
+-------------------------
+
+let Emp = require('../Models/Emp')
+let router = require('express').Router()
+
+//get all data
+router.get('/emp/getall' , async function(req,res){
+    let allemp = await Emp.find({})
+    return res.json(allemp)
+})
+
+//add data
+router.post('/emp/addall' , async function(req,res){
+    let {name , pno , email , password} = req.body
+    let e = new Emp
+    e.name = name
+    e.pno = pno
+    e.email = email
+    e.password = password
+    await e.save()
+    return res.json(e)
+})
+
+//update
+router.post('/emp/upd/:id', async function(req,res){
+    let {name,pno,email,password} = req.body
+    let id = req.params.id
+    let u = await Emp.findById(id)
+    u.name = name
+    u.pno = pno
+    u.email = email
+    u.password = password
+    await u.save()
+    return res.json(u)
+})
+
+//delete
+router.get('/emp/del/:id' , async function(req,res){
+    let id = req.params.id
+    let d = await Emp.findByIdAndDelete(id)
+    return res.json(d)
+})
+
+//single data fetch
+router.get('/emp/sigfe/:id' , async function(req,res){
+    let id = req.params.id
+    let s = await Emp.findById(id)
+    return res.json(s)
+})
+
+
+module.exports = router
+----------------------------------------
+	|
+	|
+then after go into the your php folder you created in "htdocs" or "www"
+	|
+open that folder in vscode
+	|
+create a following file in that folder:
+
+adddept.php
+addemp.php
+deldept.php
+delemp.php
+emp.php
+index.php
+upddept.php
+updemp.php
+-------------------------------------------------
+	|
+code paste one by one in particular file after creating a file 
+	|
+---------------------------
+in adddept.php file
+---------------------------
+
+<?php
+    if(isset($_POST['save']))
+    {
+        $curl = curl_init();
+
+        curl_setopt_array($curl, array(
+        CURLOPT_URL => 'localhost:2000/dept/addnew',
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_ENCODING => '',
+        CURLOPT_MAXREDIRS => 10,
+        CURLOPT_TIMEOUT => 0,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_POSTFIELDS =>'{
+            "name" : "'.$_POST['name'].'",
+            "city" : "'.$_POST['city'].'"
+        }',
+        CURLOPT_HTTPHEADER => array(
+            'Content-Type: application/json'
+        ),
+        ));
+
+        $response = curl_exec($curl);
+
+        curl_close($curl);
+        
+        header('location: index.php');
+    }
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Department</title>
+</head>
+<body>
+    <form method="post">
+        <input type="text" name="name" id="name" placeholder="Enter Name">
+        <input type="text" name="city" id="city" placeholder="Enter City">
+        <button type="submit" name="save">save</button>
+    </form>
+</body>
+</html>
+
+---------------------------
+in addemp.php file
+---------------------------
+
+<?php
+
+if(isset($_POST["add"]))
+{
+    $curl = curl_init();
+
+    curl_setopt_array($curl, array(
+    CURLOPT_URL => 'localhost:2000/emp/addall',
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_ENCODING => '',
+    CURLOPT_MAXREDIRS => 10,
+    CURLOPT_TIMEOUT => 0,
+    CURLOPT_FOLLOWLOCATION => true,
+    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+    CURLOPT_CUSTOMREQUEST => 'POST',
+    CURLOPT_POSTFIELDS =>'{
+        "name":"'.$_POST['name'].'",
+        "pno": '.$_POST['pno'].',
+        "email":"'.$_POST['email'].'",
+        "password":"'.$_POST['password'].'"
+    }',
+    CURLOPT_HTTPHEADER => array(
+        'Content-Type: application/json'
+    ),
+    ));
+
+    $response = curl_exec($curl);
+
+    curl_close($curl);
+    //echo $response;
+    header('location: emp.php');
+
+}
+
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee</title>
+</head>
+<body>
+    <form method="post">
+        <h3>Add Employee</h3>
+        <br>
+        <input type="text" name="name" required placeholder="Enter Name"/><br>
+        <input type="email" name="email" required placeholder="Enter Email" /><br>
+        <input type="number" name="pno" required  placeholder="Enter Phone No "/><br>
+        <input type="password" name="password" required  placeholder="Enter Password"/>
+        <br>
+        <button name="add">Add</button>
+    </form>
+</body>
+</html>
+
+---------------------------
+in deldept.php file
+---------------------------
+
+<?php
+    $curl = curl_init();
+
+    curl_setopt_array($curl, array(
+      CURLOPT_URL => 'localhost:2000/dept/delete/' . $_GET['id'],
+      CURLOPT_RETURNTRANSFER => true,
+      CURLOPT_ENCODING => '',
+      CURLOPT_MAXREDIRS => 10,
+      CURLOPT_TIMEOUT => 0,
+      CURLOPT_FOLLOWLOCATION => true,
+      CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+      CURLOPT_CUSTOMREQUEST => 'GET',
+    ));
+    
+    $response = curl_exec($curl);
+    
+    curl_close($curl);
+    header('location: index.php');
+?>
+
+---------------------------
+in delemp.php file
+---------------------------
+
+<?php
+
+$curl = curl_init();
+
+curl_setopt_array($curl, array(
+  CURLOPT_URL => 'localhost:2000/emp/del/'.$_GET['id'],
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_ENCODING => '',
+  CURLOPT_MAXREDIRS => 10,
+  CURLOPT_TIMEOUT => 0,
+  CURLOPT_FOLLOWLOCATION => true,
+  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+  CURLOPT_CUSTOMREQUEST => 'GET',
+));
+
+$response = curl_exec($curl);
+
+curl_close($curl);
+header('location: emp.php');
+
+?>
+
+---------------------------
+in emp.php file
+---------------------------
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>employe</title>
+</head>
+<body>
+    <a href="addemp.php">Add emp</a>
+    <br>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>id</th>
+                <th>name</th>
+                <th>pno</th>
+                <th>email</th>
+                <th>password</th>
+                <th>Delete</th>
+                <th>Update</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php
+                $curl = curl_init();
+                
+                curl_setopt_array($curl, array(
+                  CURLOPT_URL => 'localhost:2000/emp/getall',
+                  CURLOPT_RETURNTRANSFER => true,
+                  CURLOPT_ENCODING => '',
+                  CURLOPT_MAXREDIRS => 10,
+                  CURLOPT_TIMEOUT => 0,
+                  CURLOPT_FOLLOWLOCATION => true,
+                  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                  CURLOPT_CUSTOMREQUEST => 'GET',
+                ));
+                
+                $response = curl_exec($curl);
+                
+                curl_close($curl);
+                //echo $response;
+                $response = json_decode($response,true);
+                foreach ($response as $data) {
+                    echo "<tr>";
+                    echo "<td>$data[_id]</td>";
+                    echo "<td>$data[name]</td>";
+                    echo "<td>$data[pno]</td>";
+                    echo "<td>$data[email]</td>";
+                    echo "<td>$data[password]</td>";
+                    echo "<td><a href='delemp.php?id=$data[_id]'>Delete</a></td>";
+                    echo "<td><a href='updemp.php?id=$data[_id]'>update</a></td>";
+                    echo "</tr>";
+                }
+            ?>
+        </tbody>
+    </table>
+</body>
+</html>
+
+---------------------------
+in index.php file
+---------------------------
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Departments</title>
+</head>
+<body>
+    <h1>Show All Departments</h1>
+    <a href="adddept.php">Add Department</a>
+
+    <br>
+    
+    <a href="emp.php">View emp mamangemnet</a>
+    <br>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>City</th>
+                <th>Edit</th>
+                <th>Delete</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php
+                $curl = curl_init();
+
+                curl_setopt_array($curl, array(
+                  CURLOPT_URL => 'localhost:2000/dept/findall',
+                  CURLOPT_RETURNTRANSFER => true,
+                  CURLOPT_ENCODING => '',
+                  CURLOPT_MAXREDIRS => 10,
+                  CURLOPT_TIMEOUT => 0,
+                  CURLOPT_FOLLOWLOCATION => true,
+                  CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                  CURLOPT_CUSTOMREQUEST => 'GET',
+                ));
+                
+                $response = curl_exec($curl);
+                
+                curl_close($curl);
+                // echo $response;
+                $response = json_decode($response, true);
+
+                foreach ($response as $data) 
+                {
+                    echo "<tr>";
+                    echo "<td>$data[_id]</td>";
+                    echo "<td>$data[name]</td>";
+                    echo "<td>$data[city]</td>";
+                    echo "<td><a href='upddept.php?id=$data[_id]'>Update</a></td>";
+                    echo "<td><a href='deldept.php?id=$data[_id]'>Delete</a></td>";
+                    echo "</tr>";
+                }
+            ?>
+        </tbody>
+    </table>
+</body>
+</html>
+
+---------------------------
+in upddept.php file
+---------------------------
+
+<?php
+
+    if(isset($_POST['save']))
+    {
+        $curl = curl_init();
+
+        curl_setopt_array($curl, array(
+        CURLOPT_URL => 'localhost:2000/dept/update/' . $_GET['id'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_ENCODING => '',
+        CURLOPT_MAXREDIRS => 10,
+        CURLOPT_TIMEOUT => 0,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_POSTFIELDS =>'{
+            "name" : "'. $_POST['name'] .'",
+            "city" : "'. $_POST['city'] .'"
+        }',
+        CURLOPT_HTTPHEADER => array(
+            'Content-Type: application/json'
+        ),
+        ));
+
+        $response = curl_exec($curl);
+
+        curl_close($curl);
+        header('location: index.php');
+    }
+    else
+    {
+        $curl = curl_init();
+    
+        curl_setopt_array($curl, array(
+          CURLOPT_URL => 'localhost:2000/dept/getsingle/' . $_GET['id'],
+          CURLOPT_RETURNTRANSFER => true,
+          CURLOPT_ENCODING => '',
+          CURLOPT_MAXREDIRS => 10,
+          CURLOPT_TIMEOUT => 0,
+          CURLOPT_FOLLOWLOCATION => true,
+          CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+          CURLOPT_CUSTOMREQUEST => 'GET',
+        ));
+        
+        $response = curl_exec($curl);
+        
+        curl_close($curl);
+        
+        $response = json_decode($response, true);
+    }
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Update Department</title>
+</head>
+<body>
+    <form method="post">
+        <input type="text" value="<?php echo $response['name']; ?>" name="name" id="name" placeholder="Enter Name">
+        <input type="text" value="<?php echo $response['city']; ?>" name="city" id="city" placeholder="Enter City">
+        <button type="submit" name="save">save</button>
+    </form>
+</body>
+</html>
+
+---------------------------
+in updemp.php file
+---------------------------
+
+<?php
+
+if(isset($_POST['updated']))
+{
+    $curl = curl_init();
+
+    curl_setopt_array($curl, array(
+    CURLOPT_URL => 'localhost:2000/emp/upd/'.$_GET['id'],
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_ENCODING => '',
+    CURLOPT_MAXREDIRS => 10,
+    CURLOPT_TIMEOUT => 0,
+    CURLOPT_FOLLOWLOCATION => true,
+    CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+    CURLOPT_CUSTOMREQUEST => 'POST',
+    CURLOPT_POSTFIELDS =>'{
+        "name":"'.$_POST['name'].'",
+        "pno": '.$_POST['pno'].',
+        "email":"'.$_POST['email'].'",
+        "password":"'.$_POST['password'].'"
+    }',
+    CURLOPT_HTTPHEADER => array(
+        'Content-Type: application/json'
+    ),
+    ));
+
+    $response = curl_exec($curl);
+
+    curl_close($curl);
+    //echo $response;
+    header('location: emp.php');
+}
+
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>update</title>
+</head>
+<body>
+    <form method="post">
+        <h3>updatde Employee</h3>
+        <br>
+        <input type="text" name="name" required /><br>
+        <input type="email" name="email" required /><br>
+        <input type="number" name="pno" required /><br>
+        <input type="password" name="password" required />
+        <br>
+        <button name="updated">update</button>
+    </form>
+</body>
+</html>
+---------------------------------------------
+then save your project
+	|
+then after start your xamp or wamp server
+	|
+then start your node project using commandline = nodemon index.js
+	|
+open chrome and write in url
+	|
+localhost:80/your folder name you create in htdocs/www
+
+
+=========================================================
+	with login & jwt & authentication
+=========================================================
+
+
+code of register/login & crud operation using ejs 
+	|
+open particular folder in vscode
+	|
+open folder in vscode terminal
+	|
+write a command line for node_module or package
+	|
+npm init
+npm i nodemon -g
+npm i bcryptjs cookie-parser ejs express jsonwebtoken mongoose
+	|
+-------------------------------------------------------
+create index.js file & create views folder for ejs file
+-------------------------------------------------------
+	|
+in index.js file
+-----------------
+
+const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const path = require('path');
+const PORT = 5000;
+const app = express();
+const secretKey = "12AB34DC56EF78GH";
+app.set('view engine', 'ejs')
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }))
+app.use(express.static(path.join(__dirname, 'views')))
+app.use(cookieParser());
+
+const User = mongoose.model('User', new mongoose.Schema({
+    username: { type: 'String', required: true },
+    email: { type: 'String', required: true, unique: true },
+    password: { type: 'String', required: true },
+}));
+const teacher = mongoose.model('Teacher', new mongoose.Schema({
+    id: { type: "Number", required: true, unique: true },
+    title: { type: "String", required: true },
+    description: { type: "String", required: true }
+}));
+
+const authenticateJWT = (req, res, next) => {
+    const token = req.cookies.token;
+    // console.log(token)
+    if (!token) return res.send("Access Denied");
+    jwt.verify(token, secretKey, (err, user) => {
+        if (err) return res.send(err);
+        req.user = user;
+        console.log(user)
+        next();
+    })
+}
+const redirectAuth = (req, res, next) => {
+    const token = req.cookies.token
+    if (token) {
+        jwt.verify(token, secretKey, (err) => {
+            if (!err) {
+                return res.redirect("/")
+            }
+        });
+    }
+    next();
+}
+mongoose.connect("mongodb://127.0.0.1:27017/EBUsers").then((db) => {
+    console.log("MongoDB Connected")
+}).catch(err => {
+    console.error(err);
+});
+
+app.get("/login", redirectAuth, (req, res) => {
+    res.render('login');
+})
+
+app.post("/login", async (req, res) => {
+    const { email, password } = req.body;
+
+    try {
+        const user = await User.findOne({ email });
+        if (!user) {
+            res.send("<script>alert('Invalid Credentials')</script>")
+        }
+        const match = await bcrypt.compare(password, user.password)
+        if (!match) {
+            res.send("<script>alert('Invalid Credentials')</script>")
+        }
+        const token = jwt.sign({ userId: user._id, userName: user.username, email: user.email }, secretKey, { expiresIn: "1h" })
+        res.cookie('token', token, { httpOnly: true }, { expiresIn: 36000000 })
+        res.redirect("/")
+    }
+    catch (err) {
+        console.error(err.message)
+    }
+})
+
+app.get("/register", (req, res) => {
+    res.render("register")
+});
+app.post("/register", async (req, res) => {
+    const { username, email, password } = req.body;
+    const hashPass = await bcrypt.hash(password, 10)
+    const Suser = new User({ username, email, password: hashPass })
+    try {
+        const response = await Suser.save()
+        // res.send("User Saved Successfully", response)
+        res.status(200).send("User Saved Successfully")
+        // console.log(response);
+        res.redirect("/login")
+    } catch (err) {
+        console.error(err)
+    }
+});
+
+app.get("/logout", (req, res) => {
+    res.clearCookie('token');
+    res.redirect("/login")
+});
+
+app.get("/", authenticateJWT, (req, res) => {
+    res.render("home", { userId: req.user.userId, userName: req.user.userName, email: req.user.email })
+});
+
+app.post("/addteach", async (req, res) => {
+    const { id, title, desc } = req.body;
+    try {
+        const Teacher = new teacher({ id: id, title: title, description: desc })
+        const response = await Teacher.save();
+        console.log(response)
+        res.redirect("/teacher")
+    } catch (err) {
+        console.error(err.message)
+    }
+})
+app.get("/teacher", async (req, res) => {
+    try {
+        const data = await teacher.find();
+        res.render("teacher", { data })
+    } catch (err) {
+        console.error(err)
+    }
+})
+app.get("/delete/:id", async (req, res) => {
+    const id = req.params.id;
+    try {
+        const response = await teacher.deleteOne({ id: id });
+        res.redirect("/teacher")
+        console.log(response)
+    } catch (err) {
+        console.error(err)
+    }
+})
+
+app.get("/edit/:id", async (req, res) => {
+    const id = req.params.id;
+    try {
+        const data = await teacher.findOne({ id: id });
+        res.render(`edit`, { data });
+    } catch (err) {
+        console.error(err)
+    }
+});
+app.post("/editteach/:id", async (req,res) => {
+    const {id} = req.params;
+    const { title, desc } = req.body;
+    try {
+        const response = await teacher.findByIdAndUpdate(id, { title, description: desc });
+        console.log(response);
+        res.redirect("/teacher")
+    } catch (err) {
+        console.error(err)
+    }
+})
+app.listen(PORT, (err) => {
+    if (err) {
+        console.error(err)
+    }
+    console.log(`Server Running On Port =  ${PORT}`)
+});
+
+	
+--------------------------------------------
+create ejs file in views folder
+--------------------------------------------
+	|
+create login.ejs
+	|
+------------------
+in login.ejs file
+------------------
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <form action="/login" method="post">
+        <table border="1" align="center">
+            <tr>
+                <td>Enter Email : <br><input type="email" name="email" placeholder="Enter Email"></td>
+            </tr>
+            <tr>
+                <td>Enter Password : <br><input type="password" name="password" placeholder="Enter Password"></td>
+            </tr>
+            <tr>
+                <td><button type="submit">Submit</button></td>
+            </tr>
+        </table>
+    </form>
+</body>
+
+</html>
+---------------------------
+
+
+create home.ejs
+	|
+------------------
+in home.ejs file
+------------------
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    
+</head>
+
+<body>
+    <div>
+        <h1>Welcome <%=userName%>!
+        </h1>
+        <a href="/logout">Logout</a>
+    </div>
+    <form method="post" style="padding: 20px;" action="/addteach">
+        <table align="center" border="1" cellpadding="10px" cellspacing="5px">
+            <tr>
+                <td>Enter Teacher ID : <br><input type="number" name="id"></td>
+            </tr>
+            <tr>
+                <td>Enter Teacher Name : <br><input type="text" name="title"></td>
+            </tr>
+            <tr>
+                <td>Enter Teacher Description : <br><textarea name="desc" rows="5"></textarea></td>
+            </tr>
+            <tr>
+                <td><button type="submit">Submit</button></td>
+            </tr>
+        </table>
+    </form>
+
+</body>
+
+</html>
+
+------------------
+
+create edit.ejs
+	|
+------------------
+in edit.ejs file
+------------------
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit</title>
+</head>
+
+<body>
+    <form method="post" style="padding: 20px;" action="/editteach/<%=data._id%>">
+        <table align="center" border="1" cellpadding="10px" cellspacing="5px">
+            <tr>
+                <td>Enter Teacher ID : <br><input type="number" name="id" value="<%=data.id%>"></td>
+            </tr>
+            <tr>
+                <td>Enter Teacher Name : <br><input type="text" name="title" value="<%=data.title%>"></td>
+            </tr>
+            <tr>
+                <td>Enter Teacher Description : <br><textarea name="desc" rows="5"><%=data.description%></textarea></td>
+            </tr>
+            <tr>
+                <td><button type="submit">Submit</button></td>
+            </tr>
+        </table>
+    </form>
+</body>
+
+</html>
+----------------------
+
+create register.ejs
+	|
+------------------
+in register.ejs file
+------------------
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <form action="/register" method="post">
+        <table border="1" align="center">
+            <tr>
+                <td>Enter Username : <br><input type="text" name="username" placeholder="Enter Username"></td>
+            </tr>
+            <tr>
+                <td>Enter Email : <br><input type="email" name="email" placeholder="Enter Email"></td>
+            </tr>
+            <tr>
+                <td>Enter Password : <br><input type="password" name="password" placeholder="Enter Password"></td>
+            </tr>
+            <tr>
+                <td><button type="submit">Submit</button></td>
+            </tr>
+            <tr>
+                <td>Already A User <a href="/login">Login</a></td>
+            </tr>
+        </table>
+    </form>
+</body>
+
+</html>
+
+--------------------
+create teacher.ejs
+	|
+------------------
+in teacher.ejs file
+------------------
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <a href="/">ADD</a>
+    <ol>
+        <%data.forEach((teacher)=>{%>
+            <li>
+                <ul>
+                    <li>
+                        <%=teacher.id%>
+                    </li>
+                    <li>
+                        <%=teacher.title%>
+                    </li>
+                    <li>
+                        <%=teacher.description%>
+                    </li>
+                    <li>
+                        <a href="/delete/<%=teacher.id%>">Delete ID <span>
+                                <%=teacher.id%>
+                            </span></a>
+                    </li>
+                    <li>
+                        <a href="/edit/<%=teacher.id%>">Update <span>
+                                <%=teacher.id%>
+                            </span></a>
+                    </li>
+                </ul>
+            </li>
+            <br>
+            <%})%>
+                </ul>
+</body>
+
+</html>
+
+command line for run this project = nodemon index.js
+	|
+open chrome and write in url
+	|
+localhost:5000/register
+localhost:5000/login
+localhost:5000/teacher(for direct show teacher data)
+
+------------------------------------------osabin foreignkey--------------------------
+for foreignkey code 
+
+const mongoose = require('mongoose');
+
+const categorySchema = new mongoose.Schema({
+    categoryname: {
+        type: String,
+        required: true,
+        unique: true
+    }
+});
+
+const Category = mongoose.model('Category', categorySchema);
+
+module.exports = Category;
+-------------------------------------------
+
+const mongoose = require('mongoose');
+
+const productSchema = new mongoose.Schema({
+    productname: {
+        type: String,
+        required: true
+    },
+    price: {
+        type: Number,
+        required: true
+    },
+    categoryname: {
+        type: String,
+        ref: 'Category',  // Reference to the Category model
+        required: true
+    }
+});
+
+const Product = mongoose.model('Product', productSchema);
+
+module.exports = Product;
+---------------------------------------------------------------
+
+Routes 
+const express = require('express');
+const router = express.Router();
+const Category = require('../models/category');
+
+// Create a new category
+router.post('/addCategory', async (req, res) => {
+    const { categoryname } = req.body;
+
+    const newCategory = new Category({ categoryname });
+
+    try {
+        await newCategory.save();
+        res.redirect('/products/new'); // Redirect to the product form after adding category
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Server Error');
+    }
+});
+
+module.exports = router;
+-------------------------------------
+product routes 
+const express = require('express');
+const router = express.Router();
+const Product = require('../models/product');
+const Category = require('../models/category');
+
+// Display form to add a new product
+router.get('/new', async (req, res) => {
+    try {
+        const categories = await Category.find();  // Fetch all categories for the dropdown
+        res.render('addProduct', { categories });
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Server Error');
+    }
+});
+
+// Add a new product
+router.post('/addProduct', async (req, res) => {
+    const { productname, price, categoryname } = req.body;
+
+    const newProduct = new Product({
+        productname,
+        price,
+        categoryname  // Store categoryname as a foreign key reference
+    });
+
+    try {
+        await newProduct.save();
+        res.redirect('/products');
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Server Error');
+    }
+});
+
+// Display all products
+router.get('/', async (req, res) => {
+    try {
+        const products = await Product.find().populate('categoryname');  // Populate categoryname from Category model
+        res.render('listProducts', { products });
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Server Error');
+    }
+});
+
+module.exports = router;
+----------------------------------------------------
+view.ejs 
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Add Product</title>
+</head>
+<body>
+    <h1>Add New Product</h1>
+    <form action="/products/addProduct" method="POST">
+        <label>Product Name:</label>
+        <input type="text" name="productname" required><br>
+
+        <label>Price:</label>
+        <input type="number" name="price" required><br>
+
+        <label>Category:</label>
+        <select name="categoryname" required>
+            <% categories.forEach(category => { %>
+                <option value="<%= category.categoryname %>"><%= category.categoryname %></option>
+            <% }) %>
+        </select><br>
+
+        <button type="submit">Add Product</button>
+    </form>
+
+    <a href="/products">View Products</a>
+</body>
+</html>
+------------------------------------------------------------------
+list products 
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Product List</title>
+</head>
+<body>
+    <h1>Product List</h1>
+    <ul>
+        <% products.forEach(product => { %>
+            <li>
+                <strong><%= product.productname %></strong> 
+                (Price: $<%= product.price %>) - 
+                Category: <%= product.categoryname %>
+            </li>
+        <% }) %>
+    </ul>
+
+    <a href="/products/new">Add New Product</a>
+</body>
+</html>
+---------------------------------------------------------------
+index.js const express = require('express');
+const mongoose = require('mongoose');
+const bodyParser = require('body-parser');
+const app = express();
+
+// MongoDB connection
+mongoose.connect('mongodb://localhost:27017/productdb', { useNewUrlParser: true, useUnifiedTopology: true });
+
+// Middleware
+app.use(bodyParser.urlencoded({ extended: true }));
+app.set('view engine', 'ejs');
+
+// Routes
+const productRoutes = require('./routes/productRoutes');
+const categoryRoutes = require('./routes/categoryRoutes');
+
+app.use('/products', productRoutes);
+app.use('/categories', categoryRoutes);
+
+// Start server
+app.listen(3000, () => {
+    console.log('Server running on port 3000');
+});
+-------------------------------------------------
+https://chatgpt.com/c/670c89e6-cc88-8003-b4d3-960bbf2ee47c
+
+
+--------------------------------------osabin old crud code ---------------------
+first npm init 
+then install packages 
+npm i express node nodemon express-session ejs cors body-parser jsonwebtoken jwt-simple bcrypt fs mongoose multer path router 
+
+then create index.js file in main directory for all the routing 
+index.js 
+const express = require("express");
+const cors = require("cors");
+const bodyparser = require("body-parser");
+const multer = require("multer");
+const mongoose = require("mongoose");
+const json = require("body-parser/lib/types/json");
+const path = require("path");
+const session = require("express-session");
+//for encrypt password
+const bcrypt = require("bcrypt");
+//used to check it in login
+const saltRounds =10;
+
+const app = express();
+const port = 9999;
+
+//For session
+app.use(session({
+    saveUninitialized:false,
+    secret:"!#@fddGH"
+}))
+
+//Only is you want to add session to project 
+const authenticateSession = (req, res, next) => {
+    if (req.session.user) {
+        next();
+    } else {
+        res.redirect('/login');
+    }
+};
+
+//For File Upload
+const storage = multer.diskStorage({
+    destination : (req,file,cb)=>{
+        cb(null,'./uploads/')
+    },
+    filename : (req,file,cb)=>{
+        cb(null,file.originalname);
+    }
+});
+
+const upload = multer({storage : storage});
+
+//For ejs files
+app.set("view engine","ejs");
+app.set("views","./views");
+
+//This is compulsory
+app.use(bodyparser.json());
+//For user registration it is cumpolsary
+app.use(bodyparser.urlencoded({ extended: true }));
+app.use(cors());
+//For file upload uploads folder
+app.use('/uploads', express.static('uploads'));
+//For Bootstrap
+app.use('/node_modules', express.static(path.join(__dirname, 'node_modules')));
+
+//To create databaseSchama for product
+const productSchema = new mongoose.Schema({
+    "productname":String,
+    "price":Number,
+    "type":String,
+    "pimage":String
+})
+
+//To create UserSchema
+const userSchema = new mongoose.Schema({
+    "username":String,
+    "password":String
+})
+
+//Database Model
+const Product = mongoose.model("Product",productSchema);
+const User = mongoose.model("User",userSchema);
+
+//To connect mongodb and node and create a databasename(dbproduct) 
+mongoose.connect("mongodb://localhost:27017/dbproduct").then((res)=>{
+    console.log("Database Connected");
+});
+
+//Basic url to run our main page
+// app.get('/',(req,res)=>{
+//     res.render("index");
+// })
+
+//Addproduct code from register.ejs
+app.get('/addproduct',authenticateSession,(req,res)=>{
+    res.render("register")
+})
+
+//To addProduct
+app.post('/addproduct',authenticateSession,upload.single('Image'),(req,res)=>{
+    console.log(req.body);
+    console.log(req.file);
+
+    if (!req.file) {
+        return res.status(400).send("No image file uploaded");
+    }
+
+    const imageFilename = path.basename(req.file.path);
+
+    const newprod = new Product({
+        productname : req.body.productName,
+        price : req.body.price,
+        type : req.body.productType,
+        pimage : imageFilename
+    });
+
+    newprod.save().then(()=>{
+        console.log(newprod);
+        res.redirect('/index');
+    }).catch((err)=>{
+        console.error(err);
+        res.status(500).send("Error saving product");
+    });
+})
+
+//To display Product
+app.get('/index',authenticateSession,(req,res)=>{
+    Product.find().then((products)=>{
+        console.log(products);
+        //Here isloggedin will pass it from index page to ejs for session
+        res.render('index',{products,isLoggedin:true});
+    }).catch((err)=>{
+        console.error(err);
+    })
+})
+
+//To delete Product
+app.post('/delete/:id',authenticateSession,(req,res) =>{
+    Product.findByIdAndDelete(req.params.id).then(()=>{
+        res.redirect('/index');
+    }).catch((err)=>{
+        console.error(err);
+    })
+})
+
+//To Edit Product
+app.get('/edit/:id',authenticateSession,(req,res)=>{
+    Product.findById(req.params.id)
+    .then((prod) =>{
+        if(prod){
+            res.render('editproduct',{product : prod})
+        }else{
+            res.status(404).send("Product Not Product");
+        }
+    }).catch((err)=>{
+        console.error(err);
+        res.status(500).send("Error retrieving product");
+    })
+})
+
+// To Update Product
+app.post('/update/:id', authenticateSession,upload.single('Image'), (req, res) => {
+    const updatedData = {
+        productname: req.body.productName,
+        price: req.body.price,
+        type: req.body.productType,
+    };
+
+    // If a new image is uploaded, include the image path
+    if (req.file) {
+        updatedData.pimage = path.basename(req.file.path);
+    }
+
+    Product.findByIdAndUpdate(req.params.id, updatedData, { new: true, runValidators: true })
+        .then(() => {
+            res.redirect('/index');
+        })
+        .catch((err) => {
+            console.error(err);
+            res.status(500).send("Error updating product");
+        });
+});
+
+//This need to written for any kind of routing from ejs first get and then post
+app.get('/addUser',(req,res)=>{
+    res.render('register2');
+})
+
+//To add new user or register
+app.post('/addUser',async (req,res)=>{
+    const hashpassword = await bcrypt.hash(req.body.password,saltRounds);
+
+    console.log(req.body);
+
+    const newUser=new User({
+        username : req.body.username,
+        password : hashpassword
+    })
+
+    newUser.save().then(()=>{
+        console.log(newUser);
+        res.redirect('login');
+    }).catch((err)=>{
+        console.error(err);
+    })
+})
+
+app.get('/login',(req,res)=>{
+    res.render('login');
+})
+
+//Logout code 
+app.get('/logout',(req,res)=>{
+    //To remove it from session
+    delete req.session.user;
+    return res.redirect('/login');
+})
+
+//Login code with incrypted Password  
+app.post('/login',async (req,res)=>{
+    const {username,password} = req.body;
+
+    try{
+        const  user = await User.findOne({username});
+        if(!user)
+        {
+            return res.status(400).send('Invalid credentials');
+        }
+        
+        const isMatch = await bcrypt.compare(password,user.password)
+        if(isMatch){
+            console.log("Login Successful");
+            req.session.user = user;
+            res.redirect("/index");
+        }else
+        {
+            console.log("Invalid Password");
+            res.status(401).send("Invalid Username or Password");
+        }
+    }catch(err){
+        console.error(err);
+        res.status(500).send('Server error');
+    }
+})
+
+
+//To run our app on port number that is specified on the top 
+app.listen(port,(err)=>{
+    if(err){
+        console.error(err);
+    }else{
+        console.log(`Server Running on ${port}`);
+    }
+})
+-----------------index.js ends-------------------
+
+-------------------index.ejs for addProduct------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif; /* Change font style for better readability */
+            background-color: #f8f9fa; /* Light gray background color */
+        }
+        h1 {
+            text-align: center; /* Center the headings */
+        }
+        table {
+            margin: 20px auto; /* Center the table horizontally */
+            border-collapse: collapse; /* Combine borders for a cleaner look */
+            width: 90%; /* Increased width of the table */
+            border: none; /* Remove the outer border */
+        }
+        th, td {
+            padding: 10px; /* Add padding to table cells */
+            text-align: center; /* Center the text in the cells */
+            border: 1px solid #dee2e6; /* Add border to table cells */
+        }
+        th {
+            background-color: #f2f2f2; /* Light gray background for table headers */
+        }
+        img {
+            max-width: 100%; /* Ensure the image fits within its cell */
+            height: auto; /* Maintain the aspect ratio */
+        }
+    </style>
+</head>
+<body>
+    <h1>Welcome To Home Page!</h1>
+    <h1><a href="/addproduct">Add Product</a></h1>
+    <% if(!isLoggedin) {%>
+        <h1><a href="/login">Login</a></h1>
+    <%} else {%>
+        <h1><a href="/logout">Logout</a></h1>     
+    <%}%>
+
+    <table id="products">
+        <thead>
+            <tr>
+                <th>Product Name</th>
+                <th>Product Price</th>
+                <th>Product Type</th>
+                <th>Product Image</th>
+                <th>Delete</th>
+                <th>Edit</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% products.forEach(product => { %>
+                <tr>
+                    <td><%= product.productname %></td>
+                    <td><%= product.price %></td>
+                    <td><%= product.type %></td>
+                    <td><img src="/uploads/<%= product.pimage %>" alt="Product Image" width="100" height="100"></td>
+                    <form method="post" action="/delete/<%= product._id %>">
+                        <td><button type="submit">Delete</button></td>
+                    </form>
+                    <td><a href="/edit/<%= product._id %>">Edit</a></td>
+                </tr>
+            <% }) %>
+        </tbody>
+    </table>
+</body>
+</html>
+--------------index.ejs ends---------------
+
+
+----------------------register.ejs  for add new product-----------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home Page</title>
+</head>
+<body>
+    <form action="/addproduct" method="post" enctype="multipart/form-data">
+        <table border="1" cellspacing="10px" cellpadding="10px" align="center   ">
+            <tr>
+                <th>Add Product</th>
+            </tr>
+            <tr>
+                <td>Enter ProductName:</td>
+                <td><input type="text" name="productName" id="ProductName" required></td>
+            </tr>
+            <tr>
+                <td>Enter Product Price:</td>
+                <td><input type="number" name="price" id="Price" required></td>
+            </tr>
+            <tr>
+                <td>Enter Product Type:</td>
+                <td>
+                    <select id="ProductType" name="productType" required>
+                        <option value="">Select a product type</option>
+                        <option value="Tv">Tv</option>
+                        <option value="Speaker">Speaker</option>
+                        <option value="Fridge">Fridge</option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
+                <td>Product Image:</td>
+                <td>
+                    <input type="file" id="ProductImage" name="Image" required>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <button type="submit">Add Product</button>
+                </td>
+            </tr>
+        </table>
+    </form>
+</body>
+</html>
+-------------------------------addproduct ends here---------------------
+
+------------------------------------------register.ejs--------------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register</title>
+</head>
+<body style="background-color: aquamarine;">
+    <div>
+        <h1 align="center">Create New User</h1>
+        <table align="center" border="1" cellspacing="10px" cellpadding="10px" style="background-color: white;">
+            <form action="/addUser" method="post">
+                
+                <tr>
+                    <td>
+                        <label for="Username">Username</label>
+                        <input type="text" name="username" id="username" required>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <td>
+                        <label for="Password">Password</label>
+                    <input type="password" name="password" id="password" required>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <button type="submit" style="cursor: pointer;">Register</button>
+                        <button style="margin-left: 10px;"><a href="/login">Login</a></button>
+                    </td>
+                </tr>
+            </form>
+        </table>
+        
+    </div>
+</body>
+</html>
+--------------------------------register.ejs ends------------------------------
+
+---------------------------login.ejs for login -------------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+</head>
+<body style="background-color: aquamarine;">
+    <div>
+        <h1 align="center">Login Page</h1>
+        <table align="center" border="1" cellspacing="10px" cellpadding="10px" style="background-color: white">
+            <form action="/login" method="post">
+                <tr>
+                    <td>
+                        <label for="Username">Username</label>
+                        <input type="text" name="username" id="username" required>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <label for="Password">Password</label>
+                        <input type="password" name="password" id="password" required>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <button type="submit">Login</button>
+                        <button>
+                            <a href="/addUser">Register</a>
+                        </button>
+                    </td>
+                </tr>
+                
+            </form>
+        </table>
+    </div>
+</body>
+</html>
+--------------------------------login ends here-----------------
+
+--------------------------------editproduct.ejs for edit products ---------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Product</title>
+</head>
+<body>
+    <form action="/update/<%= product._id %>" method="post" enctype="multipart/form-data">
+        <table align="center" border="1" cellspacing="10px" cellpadding="10px" style="margin-top: 80px;">
+            <tr>
+                <th colspan="2">Edit Product</th>
+            </tr>
+            <tr>
+                <td>Enter ProductName:</td>
+                <td><input type="text" name="productName" id="ProductName" value="<%= product.productname %>"></td>
+            </tr>
+            <tr>
+                <td>Enter Product Price:</td>
+                <td><input type="number" name="price" id="Price" value="<%= product.price %>"></td>
+            </tr>
+            <tr>
+                <td>Enter Product Type:</td>
+                <td>
+                    <select id="ProductType" name="productType" value="<%= product.type %>">
+                        <option value="">Select a product type</option>
+                        <option value="Tv" <%= product.productType === 'Tv' ? 'selected' : '' %>>Tv</option>
+                        <option value="Speaker" <%= product.productType === 'Speaker' ? 'selected' : '' %>>Speaker</option>
+                        <option value="Fridge" <%= product.productType === 'Fridge' ? 'selected' : '' %>>Fridge</option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
+                <td>Product Image:</td>
+                <td>
+                    <input type="file" id="ProductImage" name="Image" required>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2" align="center">
+                    <button type="submit">Update Product</button>
+                </td>
+            </tr>
+        </table>
+    </form>
+</body>
+</html>
+---------------------------------editproduct.ejs ends here --------------------------------------
+
+
+
+
